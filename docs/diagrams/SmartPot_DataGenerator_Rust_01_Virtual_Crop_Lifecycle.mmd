@@ -1,0 +1,37 @@
+%%{init: {"theme": "base", "fontFamily": "Segoe UI, Arial, sans-serif", "themeVariables": {"fontFamily": "Segoe UI, Arial, sans-serif", "fontSize": "15px", "primaryColor": "#DDF5EA", "primaryTextColor": "#17261F", "primaryBorderColor": "#067A52", "secondaryColor": "#E3F2FB", "secondaryTextColor": "#17261F", "secondaryBorderColor": "#1F6FA0", "tertiaryColor": "#F2F7F4", "tertiaryTextColor": "#17261F", "tertiaryBorderColor": "#D5E3DC", "lineColor": "#5B6B63", "textColor": "#17261F", "mainBkg": "#DDF5EA", "nodeBorder": "#067A52", "clusterBkg": "#F7FAF8", "clusterBorder": "#D5E3DC", "edgeLabelBackground": "#FFFFFF", "actorBkg": "#067A52", "actorBorder": "#0B3D2B", "actorTextColor": "#FFFFFF", "actorLineColor": "#5B6B63", "signalColor": "#17261F", "signalTextColor": "#17261F", "labelBoxBkgColor": "#0B3D2B", "labelBoxBorderColor": "#0B3D2B", "labelTextColor": "#FFFFFF", "loopTextColor": "#0B3D2B", "noteBkgColor": "#FDF4DD", "noteBorderColor": "#C98D12", "noteTextColor": "#17261F", "activationBkgColor": "#DDF5EA", "activationBorderColor": "#067A52", "attributeBackgroundColorOdd": "#FFFFFF", "attributeBackgroundColorEven": "#F2F7F4"}}}%%
+sequenceDiagram
+  autonumber
+  participant A as SmartPot-API-Go
+  participant C as Axum API
+  participant M as PotManager
+  participant D as SimulatedDevice
+  participant B as Broker EMQX
+  A->>C: PUT /v1/pots/{cropId} (clave, especie, modo, lugar, intervalo)
+  C->>C: Validación de token con tiempo constante (subtle)
+  C->>M: upsert(PotConfig)
+  M->>D: new() + start() (tarea Tokio independiente)
+  D->>B: CONNECT (username: cropId, password: key, LWT: offline)
+  B-->>D: CONNACK (Success)
+  D->>B: PUBLISH smartpot/v1/{cropId}/status (online, retain)
+  D->>B: SUBSCRIBE smartpot/v1/{cropId}/commands
+  M-->>C: Ok(Arc<VirtualPot>)
+  C-->>A: 200 OK (snapshot del cultivo)
+  loop Cada intervalo (ej. 30s)
+    M->>D: publish_reading(now)
+    D->>D: Environment::step() + reading()
+    D->>B: PUBLISH smartpot/v1/{cropId}/telemetry (JSON, QoS 0)
+  end
+  opt Comando a actuador
+    B->>D: PUBLISH smartpot/v1/{cropId}/commands (id, actuator, action)
+    D->>D: Environment::apply()
+    D->>B: PUBLISH smartpot/v1/{cropId}/commands/ack (EXECUTED, QoS 1)
+    D->>M: Adelanta próxima lectura a 2s
+  end
+  opt Eliminación
+    A->>C: DELETE /v1/pots/{cropId}
+    C->>M: remove(cropId)
+    M->>D: stop()
+    D->>B: PUBLISH smartpot/v1/{cropId}/status (offline, retain)
+    D->>B: DISCONNECT
+    C-->>A: 204 No Content
+  end
