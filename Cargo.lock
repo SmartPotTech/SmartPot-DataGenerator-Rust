@@ -1247,7 +1247,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
- "rand 0.8.8",
+ "rand 0.10.3",
  "rand_distr",
  "regex",
  "reqwest",
