@@ -136,16 +136,14 @@ impl PotManager {
         let mut pots = self.pots.write().await;
         let now = Utc::now().timestamp() as f64;
 
-        let pot_entry = if let Some(existing_pot) = pots.get(&config.crop_id) {
-            let previous_config = {
+        let (pot_entry, previous_config) = if let Some(existing_pot) = pots.get(&config.crop_id) {
+            let previous = {
                 let p = existing_pot.read().await;
                 p.config.clone()
             };
 
-            let need_new_device = previous_config.key != config.key
-                || !previous_config
-                    .crop_type
-                    .eq_ignore_ascii_case(&config.crop_type);
+            let need_new_device = previous.key != config.key
+                || !previous.crop_type.eq_ignore_ascii_case(&config.crop_type);
 
             if need_new_device {
                 {
@@ -163,7 +161,11 @@ impl PotManager {
                         if let Some(target) = pots_map.get(&target_crop_id) {
                             let mut pot_guard = target.write().await;
                             let n = Utc::now().timestamp() as f64;
-                            pot_guard.next_at = pot_guard.next_at.min(n + AFTER_COMMAND_SECONDS);
+                            pot_guard.next_at = if pot_guard.next_at > 0.0 {
+                                pot_guard.next_at.min(n + AFTER_COMMAND_SECONDS)
+                            } else {
+                                n + AFTER_COMMAND_SECONDS
+                            };
                         }
                     }
                 });
@@ -185,9 +187,9 @@ impl PotManager {
                     "Cultivo virtual {} ({}) en modo {}",
                     config.crop_id, config.crop_type, config.mode
                 );
-                pot
+                (pot, None)
             } else {
-                Arc::clone(existing_pot)
+                (Arc::clone(existing_pot), Some(previous))
             }
         } else {
             let (tx, mut rx) = mpsc::channel::<()>(16);
@@ -200,7 +202,11 @@ impl PotManager {
                     if let Some(target) = pots_map.get(&target_crop_id) {
                         let mut pot_guard = target.write().await;
                         let n = Utc::now().timestamp() as f64;
-                        pot_guard.next_at = pot_guard.next_at.min(n + AFTER_COMMAND_SECONDS);
+                        pot_guard.next_at = if pot_guard.next_at > 0.0 {
+                            pot_guard.next_at.min(n + AFTER_COMMAND_SECONDS)
+                        } else {
+                            n + AFTER_COMMAND_SECONDS
+                        };
                     }
                 }
             });
@@ -222,13 +228,12 @@ impl PotManager {
                 "Cultivo virtual {} ({}) en modo {}",
                 config.crop_id, config.crop_type, config.mode
             );
-            pot
+            (pot, None)
         };
 
         // Actualizamos configuración y entorno
         {
             let mut pot_guard = pot_entry.write().await;
-            let prev_config = pot_guard.config.clone();
             pot_guard.config = config.clone();
 
             {
@@ -238,7 +243,8 @@ impl PotManager {
 
                 let mut changed = HashMap::new();
                 for (k, v) in &config.manual {
-                    if prev_config.manual.get(k) != Some(v) {
+                    let prev_val = previous_config.as_ref().and_then(|p| p.manual.get(k));
+                    if previous_config.is_none() || prev_val != Some(v) {
                         changed.insert(k.clone(), *v);
                     }
                 }
@@ -247,7 +253,8 @@ impl PotManager {
                 }
             }
 
-            let location_changed = prev_config.location != config.location;
+            let location_changed =
+                previous_config.as_ref().map(|p| &p.location) != Some(&config.location);
             let needs_weather = {
                 let env = pot_guard.device.environment.read().await;
                 env.weather.is_none()
@@ -257,7 +264,11 @@ impl PotManager {
                 Self::refresh_weather(&self.weather_client, &mut pot_guard, true).await;
             }
 
-            pot_guard.next_at = pot_guard.next_at.min(now + 2.0);
+            pot_guard.next_at = if pot_guard.next_at > 0.0 {
+                pot_guard.next_at.min(now + 2.0)
+            } else {
+                now + 2.0
+            };
         }
 
         Ok(pot_entry)

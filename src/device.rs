@@ -208,8 +208,9 @@ impl SimulatedDevice {
                         }
                     }
                     Ok(_) => {}
-                    Err(_e) => {
+                    Err(e) => {
                         connected.store(false, Ordering::SeqCst);
+                        warn!("Error en event_loop MQTT para {crop_id}: {e}");
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
                 }
@@ -350,11 +351,18 @@ impl SimulatedDevice {
         if self.is_connected() {
             if let Some(ref client) = self.client {
                 if let Ok(payload) = serde_json::to_string(&reading) {
-                    let _ = client
+                    if let Err(e) = client
                         .publish(&self.topics.telemetry, QoS::AtMostOnce, false, payload)
-                        .await;
-                    let mut pub_at = self.last_published_at.write().await;
-                    *pub_at = Some(now);
+                        .await
+                    {
+                        warn!(
+                            "Error publicando telemetría para {}: {e}",
+                            self.device.crop_id
+                        );
+                    } else {
+                        let mut pub_at = self.last_published_at.write().await;
+                        *pub_at = Some(now);
+                    }
                 }
             }
         }
