@@ -29,3 +29,10 @@ async-trait = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

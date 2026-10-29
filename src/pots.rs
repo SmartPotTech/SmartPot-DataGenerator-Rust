@@ -328,6 +328,8 @@ impl PotManager {
 
     pub async fn tick(&self, now: f64) {
         let all_pots = self.all().await;
+        let mut tasks = Vec::new();
+
         for pot_arc in all_pots {
             let should_run = {
                 let pot = pot_arc.read().await;
@@ -335,15 +337,23 @@ impl PotManager {
             };
 
             if should_run {
-                let mut pot = pot_arc.write().await;
-                pot.next_at = now + pot.config.interval_seconds;
+                let client = self.weather_client.clone();
+                let pot_clone = Arc::clone(&pot_arc);
+                tasks.push(tokio::spawn(async move {
+                    let mut pot = pot_clone.write().await;
+                    pot.next_at = now + pot.config.interval_seconds;
 
-                if pot.config.mode == "WEATHER" {
-                    Self::refresh_weather(&self.weather_client, &mut pot, false).await;
-                }
+                    if pot.config.mode == "WEATHER" {
+                        Self::refresh_weather(&client, &mut pot, false).await;
+                    }
 
-                pot.device.publish_reading(now).await;
+                    pot.device.publish_reading(now).await;
+                }));
             }
+        }
+
+        for task in tasks {
+            let _ = task.await;
         }
     }
 
@@ -367,6 +377,7 @@ impl PotManager {
                     pots.values().cloned().collect()
                 };
 
+                let mut tasks = Vec::new();
                 for pot_arc in all_pots {
                     let should_run = {
                         let pot = pot_arc.read().await;
@@ -374,15 +385,23 @@ impl PotManager {
                     };
 
                     if should_run {
-                        let mut pot = pot_arc.write().await;
-                        pot.next_at = now + pot.config.interval_seconds;
+                        let client = weather_client.clone();
+                        let pot_clone = Arc::clone(&pot_arc);
+                        tasks.push(tokio::spawn(async move {
+                            let mut pot = pot_clone.write().await;
+                            pot.next_at = now + pot.config.interval_seconds;
 
-                        if pot.config.mode == "WEATHER" {
-                            Self::refresh_weather(&weather_client, &mut pot, false).await;
-                        }
+                            if pot.config.mode == "WEATHER" {
+                                Self::refresh_weather(&client, &mut pot, false).await;
+                            }
 
-                        pot.device.publish_reading(now).await;
+                            pot.device.publish_reading(now).await;
+                        }));
                     }
+                }
+
+                for task in tasks {
+                    let _ = task.await;
                 }
             }
         });
